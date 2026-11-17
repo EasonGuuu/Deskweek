@@ -53,6 +53,11 @@ app.whenReady().then(async()=>{
       if (picker.id === 'dwTimePopover') {
         const wheelAllowed = await js(`(()=>{const column=document.querySelector('.dw-time-column');const event=new WheelEvent('wheel',{deltaY:-1.5,deltaX:0,bubbles:true,cancelable:true});return column.dispatchEvent(event);})()`);
         assert.equal(wheelAllowed, true, 'touchpad wheel event was canceled');
+        const wheelStep = await js(`(()=>{const input=document.querySelector('#newTime');return ['hour','minute'].map(part=>{const column=document.querySelector('.dw-time-column[data-column='+part+']');const max=part==='hour'?23:59;const current=Number(column.querySelector('.dw-time-option.active').dataset.value);const deltaY=current<max?100:-100;const event=new WheelEvent('wheel',{deltaY,deltaX:0,bubbles:true,cancelable:true});const allowed=column.dispatchEvent(event);const after=Number(part==='hour'?input.value.slice(0,2):input.value.slice(3,5));return {part,current,after,allowed,deltaY};});})()`);
+        for (const step of wheelStep) {
+          assert.equal(step.allowed, false, 'coarse mouse-wheel notch was not handled');
+          assert.equal((step.after - step.current + 60) % 60, step.deltaY > 0 ? 1 : 59, JSON.stringify(step));
+        }
         const rapidScroll = await js(`(()=>{const column=document.querySelector('.dw-time-column[data-column=hour]');const input=document.querySelector('#newTime');const options=[...column.querySelectorAll('.dw-time-option')];const contentTop=option=>option.offsetParent===column.offsetParent?option.offsetTop-column.offsetTop:option.getBoundingClientRect().top-column.getBoundingClientRect().top+column.scrollTop;const select=index=>{const option=options[index];column.scrollTop=contentTop(option)-column.clientHeight/2+option.offsetHeight/2;column.dispatchEvent(new Event('scroll'));};select(14);select(18);select(8);return {value:input.value,snap:getComputedStyle(column).scrollSnapType,hasScrollEnd:'onscrollend' in column};})()`);
         assert.equal(rapidScroll.snap, 'none', 'native scroll snap can fight wheel input');
         assert.equal(rapidScroll.hasScrollEnd, true, 'scrollend is unavailable');

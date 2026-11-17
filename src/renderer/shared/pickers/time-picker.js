@@ -128,6 +128,21 @@
     dispatchInput(activeInput);
   }
 
+  function stepColumnByWheel(column, direction) {
+    const options = [...column.querySelectorAll('.dw-time-option')];
+    if (!options.length) return;
+    const part = column.dataset.column;
+    const current = Number(part === 'hour' ? selectedHour : selectedMinute);
+    const next = Math.max(0, Math.min(options.length - 1, current + direction));
+    if (next !== current) {
+      if (part === 'hour') selectedHour = pad(next);
+      else selectedMinute = pad(next);
+      refreshSelection();
+      applySelection();
+    }
+    centerColumn(column, 'auto');
+  }
+
   function positionPopover() {
     if (!activeInput || !activeTrigger || !pickerOpen) return;
     const rect = activeTrigger.getBoundingClientRect();
@@ -186,6 +201,18 @@
   }
 
 [hourColumn, minuteColumn].forEach((column) => {
+    column.addEventListener('wheel', (event) => {
+      const vertical = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      if (!Number.isFinite(vertical) || Math.abs(vertical) < 0.5) return;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? column.clientHeight : 1;
+      const delta = vertical * unit;
+      // Keep touchpad scrolling native; take over coarse mouse-wheel notches.
+      if (event.deltaMode === 0 && Math.abs(delta) < 50) return;
+      event.preventDefault();
+      event.stopPropagation();
+      stepColumnByWheel(column, delta > 0 ? 1 : -1);
+    }, { passive: false });
+
     column.addEventListener('scroll', () => {
       const options = [...column.querySelectorAll('.dw-time-option')];
       if (!options.length) return;
