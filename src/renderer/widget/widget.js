@@ -33,6 +33,7 @@ const els = {
   calendarNewTime: $("#calendarNewTime"),
   calendarNewDefer: $("#calendarNewDefer"),
   closeCalendarAddDialog: $("#closeCalendarAddDialog"),
+  calendarResetAddDialog: $("#calendarResetAddDialog"),
   calendarCancelAdd: $("#calendarCancelAdd"),
   aiConfigHint: $("#aiConfigHint"),
   aiSourceText: $("#aiSourceText"),
@@ -80,6 +81,28 @@ const els = {
   taskCard: $(".task-card"),
 };
 
+function bindBackdropClose(dialog, close) {
+  let pointerDownOutside = false;
+  let pointerUpOutside = false;
+  dialog.addEventListener("pointerdown", (event) => {
+    pointerDownOutside = event.button === 0 && event.target === dialog;
+    pointerUpOutside = false;
+  });
+  dialog.addEventListener("pointerup", (event) => {
+    pointerUpOutside = pointerDownOutside && event.target === dialog;
+  });
+  dialog.addEventListener("pointercancel", () => {
+    pointerDownOutside = false;
+    pointerUpOutside = false;
+  });
+  dialog.addEventListener("click", (event) => {
+    const explicitBackdropClick = event.target === dialog && pointerDownOutside && pointerUpOutside;
+    pointerDownOutside = false;
+    pointerUpOutside = false;
+    if (explicitBackdropClick) close();
+  });
+}
+
 let calendarWheelLock = false;
 let selectedDate = todayKey();
 let editingId = null;
@@ -98,6 +121,7 @@ const AI_FILE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".
 let aiConfigAvailable = false;
 let aiKeyInvalid = false;
 let aiSummaryBusy = false;
+let aiDraftGeneration = 0;
 let state = loadState();
 let miniModeActive = false;
 let layoutRevealTimer = 0;
@@ -536,6 +560,12 @@ function clearAIProposalResults() {
 }
 
 function clearAIDraft() {
+  aiDraftGeneration += 1;
+  aiSummaryBusy = false;
+  if (els.aiSummarizeButton) {
+    els.aiSummarizeButton.disabled = false;
+    els.aiSummarizeButton.textContent = "总结并填入";
+  }
   aiImageAttachments = [];
   aiFileAttachments = [];
   if (els.aiSourceText) els.aiSourceText.value = "";
@@ -575,6 +605,7 @@ function readFileDataUrl(file) {
 }
 
 async function addAIFiles(fileList) {
+  const generation = aiDraftGeneration;
   const files = Array.from(fileList || []);
   if (!files.length) return;
   const room = Math.max(0, AI_MAX_FILES - aiFileAttachments.length);
@@ -587,6 +618,7 @@ async function addAIFiles(fileList) {
   }
   try {
     const entries = await Promise.all(accepted.map(async (file) => ({ name: file.name, size: file.size, dataUrl: await readFileDataUrl(file) })));
+    if (generation !== aiDraftGeneration) return;
     aiFileAttachments.push(...entries);
     renderAIFileList();
     if (files.length > room) setAIStatus("最多添加 5 个文件", true);
@@ -686,6 +718,13 @@ function addAllAIProposals() {
   saveState();
   renderAll();
   if (!skipped.length) {
+    els.calendarNewTitle.value = "";
+    els.calendarNewDetail.value = "";
+    els.calendarNewTime.value = "";
+    window.DeskWeekTime?.commit?.(els.calendarNewTime);
+    window.DeskWeekDefer?.set?.(els.calendarNewDefer, "none");
+    clearAIDraft();
+    window.DeskWeekDrafts?.save();
     calendarAddWillCommit = true;
     closeCalendarAddDialog();
   } else {
@@ -780,6 +819,7 @@ function applyAIItems(items) {
 }
 
 async function addAIImageFiles(fileList) {
+  const generation = aiDraftGeneration;
   const files = Array.from(fileList || []).filter((file) => file.type.startsWith("image/"));
   if (!files.length) return;
   const room = Math.max(0, 4 - aiImageAttachments.length);
@@ -791,6 +831,7 @@ async function addAIImageFiles(fileList) {
   }
   try {
     const images = await Promise.all(accepted.map(async (file) => ({ name: file.name, dataUrl: await readFileDataUrl(file) })));
+    if (generation !== aiDraftGeneration) return;
     aiImageAttachments.push(...images);
     renderAIImageList();
     if (files.length > room) setAIStatus("最多添加 4 张图片", true);
@@ -829,6 +870,7 @@ async function summarizeAISource() {
   if (!text && !aiImageAttachments.length && !aiFileAttachments.length) { setAIStatus("先粘贴文字、添加图片或文件", true); return; }
   if (aiKeyInvalid) { setAIStatus("AI 密钥已失效，请到管理中心重新填写 API Key", true); return; }
   if (!aiConfigAvailable || !window.deskWeek?.summarizeTask) { setAIStatus("先在管理中心配置 AI 接口", true); return; }
+  const generation = aiDraftGeneration;
   aiSummaryBusy = true;
   els.aiSummarizeButton.disabled = true;
   els.aiSummarizeButton.textContent = "整理中…";
@@ -840,24 +882,50 @@ async function summarizeAISource() {
       images: aiImageAttachments.map((image) => image.dataUrl),
       files: aiFileAttachments.map((file) => ({ name: file.name, dataUrl: file.dataUrl })),
     });
+    if (generation !== aiDraftGeneration) return;
     applyAIItems(result?.items || (result?.title ? [result] : []));
   } catch (error) {
-    setAIStatus(readableAIError(error), true);
+    if (generation === aiDraftGeneration) setAIStatus(readableAIError(error), true);
   } finally {
-    aiSummaryBusy = false;
-    els.aiSummarizeButton.disabled = false;
-    els.aiSummarizeButton.textContent = "总结并填入";
-    window.DeskWeekDrafts?.save();
+    if (generation === aiDraftGeneration) {
+      aiSummaryBusy = false;
+      els.aiSummarizeButton.disabled = false;
+      els.aiSummarizeButton.textContent = "总结并填入";
+      window.DeskWeekDrafts?.save();
+    }
   }
+}
+
+function calendarAddHasDraftContent() {
+  const today = todayKey();
+  const detailedDate = els.calendarNewDate.value.trim();
+  const detailedDefer = window.DeskWeekDefer?.read?.(els.calendarNewDefer) || "none";
+  return Boolean(
+    els.newTitle.value.trim() ||
+    els.newTime.value.trim() ||
+    els.calendarNewTitle.value.trim() ||
+    els.calendarNewDetail.value.trim() ||
+    els.calendarNewTime.value.trim() ||
+    (detailedDate && detailedDate !== today) ||
+    detailedDefer !== "none" ||
+    aiImageAttachments.length ||
+    aiFileAttachments.length ||
+    String(els.aiSourceText?.value || "").trim() ||
+    String(els.aiExtraPrompt?.value || "").trim() ||
+    aiProposalEntries.some((entry) => !entry.added)
+  );
 }
 
 function resetCalendarAddDefaults() {
   const today = todayKey();
   selectedDate = today;
   hoveredDateKey = "";
+  calendarAddWillCommit = false;
+  els.newTitle.value = "";
+  els.calendarNewTitle.value = "";
   els.newDate.value = today;
-  els.newTime.value = "";
   els.calendarNewDate.value = today;
+  els.newTime.value = "";
   els.calendarNewTime.value = "";
   els.calendarNewDetail.value = "";
   els.newTime.setCustomValidity?.("");
@@ -865,7 +933,18 @@ function resetCalendarAddDefaults() {
   window.DeskWeekDefer?.set?.(els.newDefer, "none");
   window.DeskWeekDefer?.set?.(els.calendarNewDefer, "none");
   clearAIDraft();
+  window.DeskWeekDrafts?.save();
+  requestAnimationFrame(() => autoResizeTextarea(els.calendarNewDetail));
   renderCalendarView();
+}
+
+function resetAllAddWindows() {
+  calendarAddWillCommit = false;
+  resetCalendarAddDefaults();
+  els.newTitle.value = "";
+  els.calendarNewTitle.value = "";
+  calendarAddOrigin = "calendar";
+  window.DeskWeekDrafts?.save();
 }
 
 function openCalendarAddDialog(date, options = {}) {
@@ -873,34 +952,44 @@ function openCalendarAddDialog(date, options = {}) {
   const target = date instanceof Date && !Number.isNaN(date.getTime()) ? date : fallback;
   const key = dateKey(target);
   const origin = options.origin === "form" ? "form" : "calendar";
+  const hadDraft = calendarAddHasDraftContent();
   calendarAddWillCommit = false;
   calendarAddOrigin = origin;
   selectedDate = key;
   state.calDate = new Date(target.getFullYear(), target.getMonth(), target.getDate());
   calendarFocusDate = new Date(state.calDate);
-  if (origin === "form") {
-    els.calendarNewDate.value = String(options.dateValue || "");
-  } else {
-    els.newDate.value = key;
-    els.calendarNewDate.value = key;
-  }
   if (!els.calendarAddDialog.open) {
-    clearAIDraft();
-    els.calendarNewTitle.value = origin === "form" ? clampText(options.title || "") : "";
-    els.calendarNewDetail.value = origin === "form" ? clampText(options.detail || "", 4000) : "";
-    els.calendarNewTime.value = origin === "form" ? String(options.time || "") : "";
-    window.DeskWeekDefer?.set?.(els.calendarNewDefer, origin === "form" ? options.defer || "none" : "none");
+    if (!hadDraft) {
+      clearAIDraft();
+      els.calendarNewTitle.value = origin === "form" ? clampText(options.title || "") : "";
+      els.calendarNewDetail.value = origin === "form" ? clampText(options.detail || "", 4000) : "";
+      els.calendarNewTime.value = origin === "form" ? String(options.time || "") : "";
+      els.calendarNewDate.value = origin === "form" ? String(options.dateValue || "") : key;
+      window.DeskWeekDefer?.set?.(els.calendarNewDefer, origin === "form" ? options.defer || "none" : "none");
+    } else if (origin === "form") {
+      if (String(options.title || "").trim()) els.calendarNewTitle.value = clampText(options.title || "");
+      if (String(options.time || "").trim()) els.calendarNewTime.value = String(options.time || "");
+      if (String(options.dateValue || "").trim()) els.calendarNewDate.value = String(options.dateValue || "");
+      if (options.defer) window.DeskWeekDefer?.set?.(els.calendarNewDefer, options.defer);
+    } else {
+      els.calendarNewDate.value = key;
+    }
     els.calendarAddDialog.showModal();
   } else if (origin === "form") {
-    els.calendarNewTitle.value = clampText(options.title || "");
-    els.calendarNewDetail.value = clampText(options.detail || "", 4000);
-    els.calendarNewTime.value = String(options.time || "");
-    window.DeskWeekDefer?.set?.(els.calendarNewDefer, options.defer || "none");
+    if (String(options.title || "").trim()) els.calendarNewTitle.value = clampText(options.title || "");
+    if (String(options.time || "").trim()) els.calendarNewTime.value = String(options.time || "");
+    if (String(options.dateValue || "").trim()) els.calendarNewDate.value = String(options.dateValue || "");
+    if (options.defer) window.DeskWeekDefer?.set?.(els.calendarNewDefer, options.defer);
+  }
+  if (origin === "calendar") {
+    els.newDate.value = key;
+    els.calendarNewDate.value = key;
   }
   refreshAIConfigHint();
   renderCalendarView();
   requestAnimationFrame(() => autoResizeTextarea(els.calendarNewDetail));
   setTimeout(() => els.calendarNewTitle.focus({ preventScroll: true }), 30);
+  window.DeskWeekDrafts?.save();
 }
 
 function closeCalendarAddDialog() {
@@ -1514,17 +1603,18 @@ els.aiSourceText?.addEventListener("paste", (event) => {
 els.calendarQuickAddButton?.addEventListener("click", () => openCalendarAddDialog(state.calDate));
 els.closeCalendarAddDialog?.addEventListener("click", closeCalendarAddDialog);
 els.calendarCancelAdd?.addEventListener("click", closeCalendarAddDialog);
-els.calendarAddDialog?.addEventListener("click", (event) => { if (event.target === els.calendarAddDialog) closeCalendarAddDialog(); });
+els.calendarAddDialog && bindBackdropClose(els.calendarAddDialog, closeCalendarAddDialog);
 els.calendarAddDialog?.addEventListener("close", () => {
   if (calendarAddWillCommit) {
     calendarAddWillCommit = false;
     calendarAddOrigin = "calendar";
     return;
   }
-  if (calendarAddOrigin === "calendar") resetCalendarAddDefaults();
-  else clearAIDraft();
   calendarAddOrigin = "calendar";
+  window.DeskWeekDrafts?.save();
 });
+els.calendarResetAddDialog?.addEventListener("click", () => window.deskWeek?.resetAddDrafts?.());
+window.deskWeek?.onAddDraftsReset?.(() => resetAllAddWindows());
 els.fishWidget.addEventListener("click", () => {
   state.showCalendar = true;
   state.showTasks = true;
@@ -1626,6 +1716,13 @@ els.calendarAddForm.addEventListener("submit", (event) => {
     window.DeskWeekTime?.commit?.(els.newTime);
     window.DeskWeekDefer?.set?.(els.newDefer, "none");
   }
+  els.calendarNewTitle.value = "";
+  els.calendarNewDetail.value = "";
+  els.calendarNewTime.value = "";
+  window.DeskWeekTime?.commit?.(els.calendarNewTime);
+  window.DeskWeekDefer?.set?.(els.calendarNewDefer, "none");
+  clearAIDraft();
+  window.DeskWeekDrafts?.save();
   renderAll();
   calendarAddWillCommit = true;
   closeCalendarAddDialog();
@@ -1664,7 +1761,7 @@ els.deleteTask.addEventListener("click", async () => {
 
 els.closeDialog.addEventListener("click", closeEditor);
 els.cancelEdit.addEventListener("click", closeEditor);
-els.dialog.addEventListener("click", (event) => { if (event.target === els.dialog) closeEditor(); });
+bindBackdropClose(els.dialog, closeEditor);
 els.confirmCancel.addEventListener("click", () => finishConfirm(false));
 els.confirmAccept.addEventListener("click", () => finishConfirm(true));
 els.confirmDialog.addEventListener("click", (event) => { if (event.target === els.confirmDialog) finishConfirm(false); });
@@ -1796,7 +1893,7 @@ function startDraftTracking() {
   let lastImages = [], lastFiles = [];
   window.DeskWeekDrafts.start({
     clear: () => { lastImages = []; lastFiles = []; },
-    hasDraft: () => Boolean(document.querySelector("dialog[open]") || els.newTitle.value.trim() || els.newTime.value.trim() || aiImageAttachments.length || aiFileAttachments.length || aiSourceTextValue()),
+    hasDraft: () => Boolean(document.querySelector("dialog[open]:not(#calendarAddDialog)") || calendarAddHasDraftContent()),
     capture: () => {
       const changed = aiImageAttachments.length !== lastImages.length || aiFileAttachments.length !== lastFiles.length || aiImageAttachments.some((x, i) => x !== lastImages[i]) || aiFileAttachments.some((x, i) => x !== lastFiles[i]);
       lastImages = [...aiImageAttachments]; lastFiles = [...aiFileAttachments];

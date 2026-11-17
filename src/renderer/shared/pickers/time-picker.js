@@ -108,27 +108,16 @@
     });
   }
 
-const scrollSyncSuppressedUntil = new WeakMap();
-  const wheelAccumulator = new WeakMap();
   function optionContentTop(column, option) {
     return option.offsetParent === column.offsetParent ? option.offsetTop - column.offsetTop : option.getBoundingClientRect().top - column.getBoundingClientRect().top + column.scrollTop;
   }
-  function centerColumn(column) {
+  function centerColumn(column, behavior = 'auto') {
     const active = column.querySelector('.dw-time-option.active');
     if (!active) return;
-    scrollSyncSuppressedUntil.set(column, performance.now() + 90);
-    column.scrollTop = optionContentTop(column, active) - column.clientHeight / 2 + active.offsetHeight / 2;
-  }
-  function selectColumnValue(column, direction) {
-    const part = column.dataset.column;
-    const max = part === 'hour' ? 23 : 59;
-    const current = Number(part === 'hour' ? selectedHour : selectedMinute);
-    const next = (current + direction + max + 1) % (max + 1);
-    if (part === 'hour') selectedHour = pad(next);
-    else selectedMinute = pad(next);
-    refreshSelection();
-    applySelection();
-    centerColumn(column);
+    const top = optionContentTop(column, active) - column.clientHeight / 2 + active.offsetHeight / 2;
+    if (Math.abs(column.scrollTop - top) < 0.5) return;
+    const smooth = behavior === 'smooth' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    column.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
   }
 
   function applySelection() {
@@ -197,30 +186,7 @@ const scrollSyncSuppressedUntil = new WeakMap();
   }
 
 [hourColumn, minuteColumn].forEach((column) => {
-    column.addEventListener('wheel', (event) => {
-      const vertical = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-      if (Math.abs(vertical) < 0.5) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? column.clientHeight : 1;
-      const delta = vertical * unit;
-      const direction = delta > 0 ? 1 : -1;
-      if (Math.abs(delta) >= 50) {
-        wheelAccumulator.set(column, 0);
-        selectColumnValue(column, direction);
-        return;
-      }
-      const accumulated = (wheelAccumulator.get(column) || 0) + delta;
-      if (Math.abs(accumulated) >= 24) {
-        wheelAccumulator.set(column, 0);
-        selectColumnValue(column, accumulated > 0 ? 1 : -1);
-      } else {
-        wheelAccumulator.set(column, accumulated);
-      }
-    }, { passive: false });
-
     column.addEventListener('scroll', () => {
-      if (performance.now() < (scrollSyncSuppressedUntil.get(column) || 0)) return;
       const options = [...column.querySelectorAll('.dw-time-option')];
       if (!options.length) return;
       let nearest = options[0];
@@ -243,6 +209,9 @@ const scrollSyncSuppressedUntil = new WeakMap();
       refreshSelection();
       applySelection();
     }, { passive: true });
+    column.addEventListener('scrollend', () => {
+      if (pickerOpen) centerColumn(column, 'smooth');
+    }, { passive: true });
   });
 
   popover.addEventListener('click', (event) => {
@@ -252,7 +221,7 @@ const scrollSyncSuppressedUntil = new WeakMap();
       else selectedMinute = option.dataset.value;
       refreshSelection();
       applySelection();
-      centerColumn(option.closest('.dw-time-column'));
+      centerColumn(option.closest('.dw-time-column'), 'smooth');
       return;
     }
     const preset = event.target.closest('[data-preset]');

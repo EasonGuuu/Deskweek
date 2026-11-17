@@ -66,6 +66,14 @@ managerClose: () => ipcRenderer.send("deskweek:manager-close"),
   },
   saveDraft: data => ipcRenderer.send("deskweek:draft-save", data),
   loadDraft: () => ipcRenderer.invoke("deskweek:draft-load"),
+  saveManagerDraft: data => ipcRenderer.send("deskweek:manager-draft-save", data),
+  loadManagerDraft: () => ipcRenderer.invoke("deskweek:manager-draft-load"),
+  resetAddDrafts: () => ipcRenderer.send("deskweek:reset-add-drafts"),
+  onAddDraftsReset: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("deskweek:add-drafts-reset", listener);
+    return () => ipcRenderer.removeListener("deskweek:add-drafts-reset", listener);
+  },
   canSuspend: () => !pending && !failed,
   runtimeReady: (data) => ipcRenderer.send("deskweek:runtime-ready", data),
   onRuntimeState: (callback) => { runtimeSubscribers.add(callback); if (runtimeState) callback(runtimeState); return () => runtimeSubscribers.delete(callback); },

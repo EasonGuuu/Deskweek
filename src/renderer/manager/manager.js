@@ -11,7 +11,7 @@ const els = {
   taskViewTitle: $("#taskViewTitle"), deferredShelf: $("#deferredTaskShelf"), deferredShelfToggle: $("#deferredShelfToggle"), deferredShelfCount: $("#deferredShelfCount"), deferredShelfList: $("#deferredShelfList"),
   managerTaskList: $("#managerTaskList"), managerAddForm: $("#managerAddForm"),
   managerNewTitle: $("#managerNewTitle"), managerNewDate: $("#managerNewDate"), managerNewTime: $("#managerNewTime"), managerNewDefer: $("#managerNewDefer"),
-  quickFocusButton: $("#quickFocusButton"), managerNewDetailButton: $("#managerNewDetailButton"),
+  quickFocusButton: $("#quickFocusButton"), managerNewDetailButton: $("#managerNewDetailButton"), managerResetAddDialog: $("#managerResetAddDialog"),
   addDialog: $("#managerAddDialog"), detailedForm: $("#managerDetailedForm"), singleTaskFields: $("#managerSingleTaskFields"), addTitle: $("#managerAddTitle"), addDetail: $("#managerAddDetail"), addDate: $("#managerAddDate"), addTime: $("#managerAddTime"), addDefer: $("#managerAddDefer"), addSubmit: $("#managerAddSubmit"),
   closeAddDialog: $("#managerCloseAddDialog"), cancelAdd: $("#managerCancelAdd"), aiProposals: $("#managerAIProposals"), aiAddAllButton: $("#managerAddAllButton"), aiConfigHint: $("#managerAIConfigHint"), aiSourceText: $("#managerAISourceText"), aiExtraPrompt: $("#managerAIExtraPrompt"), aiImageInput: $("#managerAIImageInput"), aiImageList: $("#managerAIImageList"), aiFileInput: $("#managerAIFileInput"), aiFileList: $("#managerAIFileList"), aiSummarizeButton: $("#managerAISummarizeButton"), aiSummaryStatus: $("#managerAIStatus"), aiResultBar: $("#managerAIResultBar"), aiResultText: $("#managerAIResultText"), aiImportResults: $("#managerAIImportResults"),
   calendarTitle: $("#calendarTitle"), calendarBody: $("#calendarBody"), calPrev: $("#calPrev"), calNext: $("#calNext"), calToday: $("#calToday"),
@@ -27,6 +27,28 @@ const els = {
   deleteTask: $("#managerDeleteTask"), closeDialog: $("#managerCloseDialog"), cancelEdit: $("#managerCancelEdit"), toast: $("#managerToast"),
   confirmDialog: $("#managerConfirmDialog"), confirmTitle: $("#managerConfirmTitle"), confirmMessage: $("#managerConfirmMessage"), confirmCancel: $("#managerConfirmCancel"), confirmAccept: $("#managerConfirmAccept"),
 };
+function bindBackdropClose(dialog, close) {
+  let pointerDownOutside = false;
+  let pointerUpOutside = false;
+  dialog.addEventListener("pointerdown", (event) => {
+    pointerDownOutside = event.button === 0 && event.target === dialog;
+    pointerUpOutside = false;
+  });
+  dialog.addEventListener("pointerup", (event) => {
+    pointerUpOutside = pointerDownOutside && event.target === dialog;
+  });
+  dialog.addEventListener("pointercancel", () => {
+    pointerDownOutside = false;
+    pointerUpOutside = false;
+  });
+  dialog.addEventListener("click", (event) => {
+    const explicitBackdropClick = event.target === dialog && pointerDownOutside && pointerUpOutside;
+    pointerDownOutside = false;
+    pointerUpOutside = false;
+    if (explicitBackdropClick) close();
+  });
+}
+
 let state = { items: [], prefs: {}, section: "tasks", filter: "todo", calMode: "month", calDate: new Date(), calFocusDate: new Date() };
 let editingId = null;
 let editingSnapshot = null;
@@ -44,6 +66,7 @@ const MANAGER_AI_MAX_FILES = 5;
 const MANAGER_AI_MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MANAGER_AI_FILE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".ods", ".csv", ".pptx", ".odt", ".rtf", ".txt", ".md", ".markdown", ".json", ".xml", ".yaml", ".yml", ".log"]);
 let managerAISummaryBusy = false;
+let managerAIDraftGeneration = 0;
 let managerAIConfigAvailable = false;
 let managerAIKeyInvalid = false;
 let managerAISingleResult = false;
@@ -52,6 +75,8 @@ let settingsAIImageAttachments = [];
 let settingsAIEntries = [];
 let settingsAIParseBusy = false;
 let managerAddSource = "new";
+let managerDraftTimer = 0;
+let managerLoadedDraft = null;
 let latestUpdateInfo = null;
 let updateBusy = false;
 function normalizedTheme(value) { return value === "dark" ? "dark" : "light"; }
@@ -572,6 +597,12 @@ function clearManagerAIProposalResults() {
 }
 
 function clearManagerAIDraft() {
+  managerAIDraftGeneration += 1;
+  managerAISummaryBusy = false;
+  if (els.aiSummarizeButton) {
+    els.aiSummarizeButton.disabled = false;
+    els.aiSummarizeButton.textContent = "总结并填入";
+  }
   managerAIImageAttachments = [];
   managerAIFileAttachments = [];
   if (els.aiSourceText) els.aiSourceText.value = "";
@@ -582,6 +613,111 @@ function clearManagerAIDraft() {
   renderManagerAIFileList();
   clearManagerAIProposalResults();
   setManagerAIStatus("");
+}
+
+function managerAddDraftHasContent(draft) {
+  if (!draft) return false;
+  const hasFields = Boolean(
+    String(draft.title || "").trim() ||
+    String(draft.detail || "").trim() ||
+    String(draft.time || "").trim() ||
+    (draft.date && draft.date !== todayKey()) ||
+    (draft.defer && draft.defer !== "none")
+  );
+  const hasAI = Boolean(
+    String(draft.aiSource || "").trim() ||
+    String(draft.aiExtraPrompt || "").trim() ||
+    draft.aiImages?.length ||
+    draft.aiFiles?.length ||
+    draft.aiProposals?.length
+  );
+  return hasFields || hasAI;
+}
+
+function readManagerAddDraft() {
+  const draft = {
+    title: String(els.addTitle?.value || ""),
+    detail: String(els.addDetail?.value || ""),
+    date: String(els.addDate?.value || ""),
+    time: String(els.addTime?.value || ""),
+    defer: window.DeskWeekDefer?.read?.(els.addDefer) || "none",
+    source: managerAddSource,
+    open: Boolean(els.addDialog?.open),
+    aiSource: String(els.aiSourceText?.value || ""),
+    aiExtraPrompt: String(els.aiExtraPrompt?.value || ""),
+    aiImages: managerAIImageAttachments.map((image) => ({ ...image })),
+    aiFiles: managerAIFileAttachments.map((file) => ({ ...file })),
+    aiSingle: managerAISingleResult,
+    aiProposals: managerAIProposalEntries.filter((entry) => !entry.added).map((entry) => ({
+      title: entry.titleInput.value,
+      detail: entry.detailInput.value,
+      date: entry.dateInput.value,
+      time: entry.timeInput.value,
+      defer: window.DeskWeekDefer?.read?.(entry.deferPicker) || "none",
+    })),
+  };
+  return managerAddDraftHasContent(draft) ? draft : null;
+}
+
+function saveManagerAddDraftNow() {
+  clearTimeout(managerDraftTimer);
+  managerLoadedDraft = readManagerAddDraft();
+  window.deskWeek?.saveManagerDraft?.(managerLoadedDraft);
+}
+
+function scheduleManagerAddDraftSave() {
+  clearTimeout(managerDraftTimer);
+  managerDraftTimer = setTimeout(saveManagerAddDraftNow, 40);
+}
+
+function applyManagerAddDraft(draft) {
+  if (!managerAddDraftHasContent(draft)) return false;
+  managerLoadedDraft = draft;
+  managerAddSource = draft.source || managerAddSource;
+  els.addTitle.value = clampText(draft.title || "");
+  els.addDetail.value = clampText(draft.detail || "", 4000);
+  els.addDate.value = String(draft.date || "");
+  els.addTime.value = String(draft.time || "");
+  els.addTime.setCustomValidity?.("");
+  window.DeskWeekDefer?.set?.(els.addDefer, normalizeDefer(draft.defer));
+  els.aiSourceText.value = String(draft.aiSource || "");
+  els.aiExtraPrompt.value = String(draft.aiExtraPrompt || "");
+  managerAIImageAttachments = (draft.aiImages || []).map((image) => ({ ...image }));
+  managerAIFileAttachments = (draft.aiFiles || []).map((file) => ({ ...file }));
+  managerAISingleResult = Boolean(draft.aiSingle);
+  renderManagerAIImageList();
+  renderManagerAIFileList();
+  renderManagerAIProposals(draft.aiProposals || []);
+  if (managerAISingleResult) updateManagerAIResultBar();
+  requestAnimationFrame(() => autoResizeTextarea(els.addDetail));
+  return true;
+}
+
+function clearManagerAddDraft() {
+  clearTimeout(managerDraftTimer);
+  managerLoadedDraft = null;
+  window.deskWeek?.saveManagerDraft?.(null);
+}
+
+function resetManagerAddState() {
+  clearManagerAddDraft();
+  managerAddSource = "new";
+  const today = todayKey();
+  els.managerNewTitle.value = "";
+  els.managerNewDate.value = today;
+  els.managerNewTime.value = "";
+  els.managerNewTime.setCustomValidity?.("");
+  els.managerNewTime.closest(".dw-time-control")?.removeAttribute("data-invalid");
+  window.DeskWeekDefer?.set?.(els.managerNewDefer, "none");
+  els.addTitle.value = "";
+  els.addDetail.value = "";
+  els.addDate.value = today;
+  els.addTime.value = "";
+  els.addTime.setCustomValidity?.("");
+  els.addTime.closest(".dw-time-control")?.removeAttribute("data-invalid");
+  window.DeskWeekDefer?.set?.(els.addDefer, "none");
+  clearManagerAIDraft();
+  requestAnimationFrame(() => autoResizeTextarea(els.addDetail));
 }
 
 function autoResizeTextarea(input) {
@@ -611,6 +747,7 @@ function readManagerFileDataUrl(file) {
 }
 
 async function addManagerAIFiles(fileList) {
+  const generation = managerAIDraftGeneration;
   const files = Array.from(fileList || []);
   if (!files.length) return;
   const room = Math.max(0, MANAGER_AI_MAX_FILES - managerAIFileAttachments.length);
@@ -623,6 +760,7 @@ async function addManagerAIFiles(fileList) {
   }
   try {
     const entries = await Promise.all(accepted.map(async (file) => ({ name: file.name, size: file.size, dataUrl: await readManagerFileDataUrl(file) })));
+    if (generation !== managerAIDraftGeneration) return;
     managerAIFileAttachments.push(...entries);
     renderManagerAIFileList();
     if (files.length > room) setManagerAIStatus("最多添加 5 个文件", true);
@@ -736,7 +874,7 @@ async function addAllManagerAIProposals() {
     return;
   }
   renderAll();
-  if (!skipped.length) closeManagerAddDialog();
+  if (!skipped.length) { closeManagerAddDialog(); clearManagerAddDraft(); }
   else {
     setManagerAIStatus(`已导入 ${prepared.length} 项，跳过 ${skipped.length} 项：内容不完整，请修改后再试`, true);
     scrollManagerAIResultIntoView();
@@ -817,6 +955,7 @@ function readManagerImageDataUrl(file) {
 }
 
 async function addManagerAIImages(fileList) {
+  const generation = managerAIDraftGeneration;
   const files = Array.from(fileList || []).filter((file) => file.type.startsWith("image/"));
   if (!files.length) return;
   const room = Math.max(0, 4 - managerAIImageAttachments.length);
@@ -828,6 +967,7 @@ async function addManagerAIImages(fileList) {
   }
   try {
     const images = await Promise.all(accepted.map(async (file) => ({ name: file.name, dataUrl: await readManagerImageDataUrl(file) })));
+    if (generation !== managerAIDraftGeneration) return;
     managerAIImageAttachments.push(...images);
     renderManagerAIImageList();
     if (files.length > room) setManagerAIStatus("最多添加 4 张图片", true);
@@ -1067,6 +1207,7 @@ async function summarizeManagerAISource() {
   if (!source && !managerAIImageAttachments.length && !managerAIFileAttachments.length) { setManagerAIStatus("先粘贴文字、添加图片或文件", true); return; }
   if (managerAIKeyInvalid) { setManagerAIStatus("AI 密钥已失效，请在设置里重新填写 API Key", true); return; }
   if (!managerAIConfigAvailable || !window.deskWeek?.summarizeTask) { setManagerAIStatus("先在设置里配置 AI 接口", true); return; }
+  const generation = managerAIDraftGeneration;
   managerAISummaryBusy = true; els.aiSummarizeButton.disabled = true; els.aiSummarizeButton.textContent = "整理中…"; setManagerAIStatus("正在读取资料并整理…");
   try {
     const result = await window.deskWeek.summarizeTask({
@@ -1075,28 +1216,39 @@ async function summarizeManagerAISource() {
       images: managerAIImageAttachments.map((image) => image.dataUrl),
       files: managerAIFileAttachments.map((file) => ({ name: file.name, dataUrl: file.dataUrl })),
     });
+    if (generation !== managerAIDraftGeneration) return;
     applyManagerAIItems(result?.items || (result?.title ? [result] : []));
   } catch (error) {
-    setManagerAIStatus(readableManagerAIError(error), true);
+    if (generation === managerAIDraftGeneration) setManagerAIStatus(readableManagerAIError(error), true);
   } finally {
-    managerAISummaryBusy = false; els.aiSummarizeButton.disabled = false; els.aiSummarizeButton.textContent = "总结并填入";
+    if (generation === managerAIDraftGeneration) {
+      managerAISummaryBusy = false; els.aiSummarizeButton.disabled = false; els.aiSummarizeButton.textContent = "总结并填入";
+    }
   }
 }
 
 function openManagerAddDialog(date = "", draft = {}, source = "new") {
   const key = isValidDateKey(date) ? date : "";
-  managerAddSource = source;
-  els.addTitle.value = clampText(draft.title || "");
-  els.addDetail.value = clampText(draft.detail || "", 4000);
-  els.addDate.value = key;
-  els.addTime.value = String(draft.time || "");
-  els.addTime.setCustomValidity?.("");
-  window.DeskWeekDefer?.set?.(els.addDefer, normalizeDefer(draft.defer));
-  clearManagerAIDraft();
+  const saved = managerLoadedDraft && managerAddDraftHasContent(managerLoadedDraft) ? managerLoadedDraft : null;
+  if (saved) {
+    applyManagerAddDraft(saved);
+    managerAddSource = saved.source || source;
+    if (!els.addDate.value && key) els.addDate.value = key;
+  } else {
+    managerAddSource = source;
+    els.addTitle.value = clampText(draft.title || "");
+    els.addDetail.value = clampText(draft.detail || "", 4000);
+    els.addDate.value = key;
+    els.addTime.value = String(draft.time || "");
+    els.addTime.setCustomValidity?.("");
+    window.DeskWeekDefer?.set?.(els.addDefer, normalizeDefer(draft.defer));
+    clearManagerAIDraft();
+  }
   refreshManagerAIConfigHint();
-  els.addDialog.showModal();
+  if (!els.addDialog.open) els.addDialog.showModal();
   requestAnimationFrame(() => autoResizeTextarea(els.addDetail));
   setTimeout(() => els.addTitle.focus({ preventScroll: true }), 30);
+  scheduleManagerAddDraftSave();
 }
 
 function closeManagerAddDialog() {
@@ -1409,6 +1561,7 @@ els.detailedForm.addEventListener("submit", (event) => {
   const fromInline = managerAddSource === "inline";
   state.items.push(normalizeItem({ id: uid(), title, detail: clampText(els.addDetail.value, 4000), date, time, defer, done: false, color: nextTaskColor(date), createdAt: new Date().toISOString() }));
   closeManagerAddDialog();
+  clearManagerAddDraft();
   if (fromInline) {
     els.managerNewTitle.value = "";
     els.managerNewDate.value = date;
@@ -1455,9 +1608,15 @@ els.deleteTask.addEventListener("click", async () => {
   item.deleted = true; item.deletedAt = new Date().toISOString(); closeEditor(); commit("已移到垃圾箱");
 });
 els.closeDialog.addEventListener("click", closeEditor); els.cancelEdit.addEventListener("click", closeEditor);
-els.dialog.addEventListener("click", (event) => { if (event.target === els.dialog) closeEditor(); });
+bindBackdropClose(els.dialog, closeEditor);
 els.closeAddDialog.addEventListener("click", closeManagerAddDialog); els.cancelAdd.addEventListener("click", closeManagerAddDialog);
-els.addDialog.addEventListener("click", (event) => { if (event.target === els.addDialog) closeManagerAddDialog(); });
+bindBackdropClose(els.addDialog, closeManagerAddDialog);
+els.addDialog.addEventListener("input", scheduleManagerAddDraftSave, true);
+els.addDialog.addEventListener("change", scheduleManagerAddDraftSave, true);
+els.addDialog.addEventListener("close", saveManagerAddDraftNow);
+window.addEventListener("beforeunload", saveManagerAddDraftNow);
+els.managerResetAddDialog.addEventListener("click", () => window.deskWeek?.resetAddDrafts?.());
+window.deskWeek?.onAddDraftsReset?.(() => resetManagerAddState());
 els.aiSummarizeButton.addEventListener("click", summarizeManagerAISource);
 els.aiImportResults?.addEventListener("click", () => {
   if (managerAIProposalEntries.length) addAllManagerAIProposals();
@@ -1567,6 +1726,19 @@ async function init() {
     applyTheme(state.prefs.theme || document.documentElement.dataset.theme || "light");
     renderAll();
   });
+  try {
+    const draft = await window.deskWeek?.loadManagerDraft?.();
+    if (draft && managerAddDraftHasContent(draft)) {
+      managerLoadedDraft = draft;
+      applyManagerAddDraft(draft);
+      refreshManagerAIConfigHint();
+      if (draft.open && !els.addDialog.open) {
+        els.addDialog.showModal();
+        requestAnimationFrame(() => autoResizeTextarea(els.addDetail));
+        setTimeout(() => els.addTitle.focus({ preventScroll: true }), 30);
+      }
+    }
+  } catch { /* keep drafts optional */ }
   syncStartupUpdateState();
 }
 window.addEventListener("focus", () => requestAnimationFrame(renderAll));

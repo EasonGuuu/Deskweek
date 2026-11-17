@@ -83,6 +83,22 @@ test("manager close during load is guarded too", () => {
   assert.equal(loaded.length, 0);
 });
 
+test("manager drafts stay isolated and survive manager recreation", () => {
+  const { windows } = harness();
+  const widget = windows.createWidget();
+  const manager = windows.showManager();
+  windows.saveDraft({ title: "widget draft" });
+  windows.saveManagerDraft({ title: "manager draft", detail: "keep me" });
+  assert.equal(windows.loadDraft().title, "widget draft");
+  assert.equal(windows.loadManagerDraft().title, "manager draft");
+  assert.equal(windows.isWidgetSender(widget.webContents), true);
+  assert.equal(windows.isManagerSender(manager.webContents), true);
+  manager.destroy();
+  const reopened = windows.showManager();
+  assert.equal(windows.isManagerSender(reopened.webContents), true);
+  assert.equal(windows.loadManagerDraft().detail, "keep me");
+});
+
 test("runtime and store broadcasts skip a destroyed renderer", () => {
   const { windows } = harness();
   const win = windows.createWidget();

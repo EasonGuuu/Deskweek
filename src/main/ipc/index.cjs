@@ -63,6 +63,14 @@ function registerIPC({ electron, windows, store, aiConfig, ai, updates, runtime,
   handle("qr-export-close", event => { qrSessions.delete(event.sender.id); return true; });
   handle("draft-load", event => windows.isWidgetSender(event.sender) ? windows.loadDraft() : null);
   on("draft-save", (event, value) => { if (windows.isWidgetSender(event.sender)) windows.saveDraft(value); });
+  handle("manager-draft-load", event => windows.isManagerSender(event.sender) ? windows.loadManagerDraft() : null);
+  on("manager-draft-save", (event, value) => { if (windows.isManagerSender(event.sender)) windows.saveManagerDraft(value); });
+  on("reset-add-drafts", event => {
+    if (!windows.isWidgetSender(event.sender) && !windows.isManagerSender(event.sender)) return;
+    windows.saveDraft(null);
+    windows.saveManagerDraft(null);
+    windows.broadcast("deskweek:add-drafts-reset");
+  });
   handle("set-mini-mode", (event, enabled) => windows.isWidgetSender(event.sender) ? windows.setMini(Boolean(enabled)) : { enabled: false });
   handle("sample-background", event => windows.isWidgetSender(event.sender) ? windows.sampleBackground(desktopCapturer) : null);
   on("quit", () => app.quit());

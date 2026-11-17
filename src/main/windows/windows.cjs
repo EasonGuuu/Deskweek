@@ -17,7 +17,7 @@ function createWindows({ app, BrowserWindow, screen, shell, root, dataDir, onSta
   const desktop = createDesktopManager();
   const stateFile = path.join(dataDir, "window-state.json");
   let widget, mini = false, preMini, normalBounds, hidden = false, gesture, gestureTimer, displayTimer;
-  let stopping = false, status = "正在启动", fallbackRetry = 0, draft = null, backgroundSampling = null, suspendedBounds = null;
+  let stopping = false, status = "正在启动", fallbackRetry = 0, draft = null, managerDraft = null, backgroundSampling = null, suspendedBounds = null;
   const managers = new Set();
   const runtimeSent = new WeakMap();
   function managerState(state, win) {
@@ -168,10 +168,13 @@ function createWindows({ app, BrowserWindow, screen, shell, root, dataDir, onSta
     managerRuntimeState: managerState,
     saveDraft(value) { draft = value ? { ...value, assets: value.assets || draft?.assets } : null; },
     loadDraft: () => draft,
+    saveManagerDraft(value) { managerDraft = value || null; },
+    loadManagerDraft: () => managerDraft,
     widget: () => widget,
     // Keep the last fitted desktop position available while the renderer is unloaded.
     widgetBounds: () => widget && !widget.isDestroyed() ? getBounds() : suspendedBounds || normalBounds,
     isWidgetSender: sender => Boolean(widget && !widget.isDestroyed() && widget.webContents === sender),
+    isManagerSender: sender => [...managers].some(win => !win.isDestroyed() && win.webContents === sender),
     isHidden: () => hidden,
     async sampleBackground(desktopCapturer) {
       if (!widget || widget.isDestroyed() || hidden || mini) return null;

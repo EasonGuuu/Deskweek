@@ -50,6 +50,17 @@ app.whenReady().then(async()=>{
       const colors=await js(`(()=>{const p=document.getElementById(${JSON.stringify(picker.id)});return {visible:!p.hidden,bg:getComputedStyle(p).backgroundColor,color:getComputedStyle(p.querySelector(${JSON.stringify(picker.title)})||p).color};})()`);
       assert.equal(colors.visible,true); assert.equal(colors.bg,'rgba(24, 24, 27, 0.88)');
       assert.equal(colors.color,'rgb(245, 245, 247)',JSON.stringify({picker,colors}));
+      if (picker.id === 'dwTimePopover') {
+        const wheelAllowed = await js(`(()=>{const column=document.querySelector('.dw-time-column');const event=new WheelEvent('wheel',{deltaY:-1.5,deltaX:0,bubbles:true,cancelable:true});return column.dispatchEvent(event);})()`);
+        assert.equal(wheelAllowed, true, 'touchpad wheel event was canceled');
+        const rapidScroll = await js(`(()=>{const column=document.querySelector('.dw-time-column[data-column=hour]');const input=document.querySelector('#newTime');const options=[...column.querySelectorAll('.dw-time-option')];const contentTop=option=>option.offsetParent===column.offsetParent?option.offsetTop-column.offsetTop:option.getBoundingClientRect().top-column.getBoundingClientRect().top+column.scrollTop;const select=index=>{const option=options[index];column.scrollTop=contentTop(option)-column.clientHeight/2+option.offsetHeight/2;column.dispatchEvent(new Event('scroll'));};select(14);select(18);select(8);return {value:input.value,snap:getComputedStyle(column).scrollSnapType,hasScrollEnd:'onscrollend' in column};})()`);
+        assert.equal(rapidScroll.snap, 'none', 'native scroll snap can fight wheel input');
+        assert.equal(rapidScroll.hasScrollEnd, true, 'scrollend is unavailable');
+        assert.equal(rapidScroll.value.startsWith('08:'), true, JSON.stringify(rapidScroll));
+        const scrollCheck = await js(`(()=>{const column=document.querySelector('.dw-time-column[data-column=hour]');const input=document.querySelector('#newTime');const before=input.value;const target=before.startsWith('23:')?0:23;column.scrollTop=target===23?column.scrollHeight:0;column.dispatchEvent(new Event('scroll'));return {before,expected:String(target).padStart(2,'0')};})()`);
+        const after = await until(async()=>{const value=await js("document.querySelector('#newTime').value");return value.startsWith(scrollCheck.expected + ':') ? value : false;},"Time column scroll did not update the input");
+        assert.notEqual(after, scrollCheck.before, 'time scroll did not change selection');
+      }
       await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     }
     if(process.env.DESKWEEK_PREVIEW){

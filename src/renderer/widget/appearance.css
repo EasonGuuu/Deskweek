@@ -490,3 +490,12 @@ body.theme-light #aiExtraPrompt { border-color: rgba(48,96,82,.12); background: 
 body.theme-light .ai-result-bar { border-color: rgba(42, 146, 124, .22); background: rgba(47, 157, 134, .08); }
 body.theme-light .ai-result-text { color: #293f39; }
 body.theme-light .ai-proposal-card.is-invalid { border-color: rgba(208, 95, 95, .48); background: rgba(208, 95, 95, .06); }
+
+
+/* Add-dialog reset control */
+.dialog-heading-group { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.dialog-heading-group h2 { margin: 0; }
+.dialog-reset-button { width: 30px; height: 30px; flex: 0 0 30px; }
+.dialog-reset-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; transition: transform .22s ease; }
+.dialog-reset-button:hover svg { transform: rotate(90deg); }
+.dialog-reset-button:active svg { transform: rotate(160deg); }

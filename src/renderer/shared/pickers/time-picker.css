@@ -202,7 +202,9 @@ body.theme-dark {
   height: 116px;
   overflow-y: auto;
   overscroll-behavior: contain;
-scroll-behavior: auto;
+  scroll-behavior: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   border: 1px solid var(--tp-line);
   border-radius: 12px;
