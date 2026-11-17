@@ -40,3 +40,19 @@ test("Windows installer restores partial backup even when its log cannot be writ
   assert.equal(fs.readFileSync(path.join(dir, "app/personal.txt"), "utf8").trim(), "keep");
   assert.match(fs.readFileSync(path.join(dir, "app/chrome_100_percent.pak"), "utf8"), /old-pak/);
 });
+test("Windows updater validates the package before asking the running app to exit", { skip: process.platform !== "win32" }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deskweek-updater-handshake-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, "app");
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, "DeskWeek.exe"), "old-exe");
+  const started = path.join(dir, "started.flag");
+  const command = ". $env:DESKWEEK_INSTALLER_SCRIPT -WaitPid 2147483647 -ZipPath (Join-Path $env:DESKWEEK_INSTALLER_TEST_DIR 'missing.zip') -TargetDir (Join-Path $env:DESKWEEK_INSTALLER_TEST_DIR 'app') -ExePath (Join-Path $env:DESKWEEK_INSTALLER_TEST_DIR 'app\\DeskWeek.exe') -LogPath (Join-Path $env:DESKWEEK_INSTALLER_TEST_DIR 'update.log') -StartedPath (Join-Path $env:DESKWEEK_INSTALLER_TEST_DIR 'started.flag')";
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], {
+    env: { ...process.env, DESKWEEK_INSTALLER_TEST_DIR: dir, DESKWEEK_INSTALLER_SCRIPT: path.resolve(__dirname, "../src/main/updates/install-update.ps1") }, encoding: "utf8", timeout: 20000, windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(started), false, "the old app must not be released before the package is validated");
+  assert.equal(fs.readFileSync(path.join(target, "DeskWeek.exe"), "utf8"), "old-exe");
+  assert.match(fs.readFileSync(path.join(dir, "update.log"), "utf8"), /Update package is missing/);
+});

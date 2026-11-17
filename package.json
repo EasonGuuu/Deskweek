@@ -1,7 +1,7 @@
 {
   "name": "deskweek-float",
   "productName": "DeskWeek",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "A small desktop floating weekly calendar and deadline-sorted todo list.",
   "main": "src/main/index.cjs",
   "private": true,

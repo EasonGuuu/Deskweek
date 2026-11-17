@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const crypto = require("node:crypto");
 const { EventEmitter } = require("node:events");
 
-test("successful verified download starts installer and calls the actual app quit", async () => {
+test("successful verified download starts installer and exits the old app", async () => {
   const payload = Buffer.from("fixture update");
   let quit = 0, timer, spawned = false, spawnedCommand = "", spawnedArgs = [];
   const io = { mkdirSync() {}, writeFileSync() {}, renameSync() {}, unlinkSync() {}, existsSync: path => String(path).endsWith(".started"),
@@ -21,7 +21,7 @@ test("successful verified download starts installer and calls the actual app qui
       ok: true, headers: { get: () => payload.length }, body: { getReader() { let done = false; return { read: async () => { const result = done ? { done: true } : { done: false, value: payload }; done = true; return result; } }; } },
     },
     require(name) {
-      if (name === "electron") return { app: { isPackaged: true, getVersion: () => "1.2.2", quit: () => quit++ } };
+      if (name === "electron") return { app: { isPackaged: true, getVersion: () => "1.2.2", exit: () => quit++ } };
       if (name === "node:fs") return io;
       if (name === "node:child_process") return { spawn(command, args) { spawned = true; spawnedCommand = command; spawnedArgs = args; const child = new EventEmitter(); child.unref = () => {}; child.kill = () => {}; queueMicrotask(() => child.emit("spawn")); return child; } };
       return require(name);
@@ -32,7 +32,7 @@ test("successful verified download starts installer and calls the actual app qui
   assert.equal(result.updated, true); assert.equal(spawned, true);
   assert.equal(spawnedCommand, path.join("C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"));
   assert.equal(spawnedArgs.at(-1).endsWith(".started"), true);
-  timer(); assert.equal(quit, 1);
+  timer(); assert.equal(quit, 1, "updater should force the old process to exit");
 });
 test("developer runtime cannot replace its Electron installation", async () => {
   const sandbox = { module: { exports: {} }, require: name => name === "electron" ? { app: { isPackaged: false } } : require(name) };

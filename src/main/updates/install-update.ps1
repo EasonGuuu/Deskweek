@@ -12,20 +12,23 @@ function RemoveChild([string]$Root, [string]$Name) {
   $resolved = Child $Root $Name
   if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
 }
+function WithRetry([scriptblock]$Action) {
+  for ($attempt = 1; $attempt -le 8; $attempt += 1) {
+    try { & $Action; return }
+    catch {
+      if ($attempt -eq 8) { throw }
+      Start-Sleep -Milliseconds (200 * $attempt)
+    }
+  }
+}
 $backupRoot = $null
 $extractRoot = $null
 $moved = [Collections.Generic.List[string]]::new()
 $installed = [Collections.Generic.List[string]]::new()
 try {
-  Set-Content -LiteralPath $StartedPath -Value ([DateTime]::UtcNow.ToString('o')) -Encoding utf8
   $TargetDir = [IO.Path]::GetFullPath($TargetDir).TrimEnd('\')
   if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ExePath)) -ne $TargetDir -or [IO.Path]::GetFileName($ExePath) -ne 'DeskWeek.exe') { throw 'Invalid application directory' }
-  $deadline = [DateTime]::UtcNow.AddSeconds(60)
-  while (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue) {
-    if ([DateTime]::UtcNow -gt $deadline) { throw 'Application did not exit' }
-    Start-Sleep -Milliseconds 500
-  }
-  Start-Sleep -Milliseconds 700
+  if (-not (Test-Path -LiteralPath $ZipPath)) { throw 'Update package is missing' }
   $extractRoot = Join-Path $env:TEMP ('DeskWeek-update-' + [Guid]::NewGuid().ToString('N'))
   $backupRoot = Join-Path $env:TEMP ('DeskWeek-backup-' + [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $extractRoot, $backupRoot | Out-Null
@@ -35,6 +38,18 @@ try {
   if (-not $source -and (Test-Path -LiteralPath (Join-Path $extractRoot 'DeskWeek.exe'))) { $source = Get-Item -LiteralPath $extractRoot }
   if (-not $source -or -not (Test-Path -LiteralPath (Join-Path $source.FullName 'resources\app.asar'))) { throw 'Invalid update package' }
   $newNames = @(Get-ChildItem -LiteralPath $source.FullName -Force | Where-Object { $_.Name -ne 'data' } | ForEach-Object { $_.Name })
+  Set-Content -LiteralPath $StartedPath -Value ([DateTime]::UtcNow.ToString('o')) -Encoding utf8
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  while (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue) {
+    if ([DateTime]::UtcNow -gt $deadline) {
+      Stop-Process -Id $WaitPid -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Milliseconds 700
+      break
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  if (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue) { throw 'Application did not exit' }
+  Start-Sleep -Milliseconds 700
   $manifest = Join-Path $TargetDir '.deskweek-files.json'
   $oldNames = @('DeskWeek.exe', 'resources', 'locales', 'chrome_100_percent.pak', 'chrome_200_percent.pak', 'd3dcompiler_47.dll', 'dxcompiler.dll', 'dxil.dll', 'ffmpeg.dll', 'icudtl.dat', 'libEGL.dll', 'libGLESv2.dll', 'LICENSE', 'LICENSES.chromium.html', 'resources.pak', 'snapshot_blob.bin', 'v8_context_snapshot.bin', 'vk_swiftshader.dll', 'vk_swiftshader_icd.json', 'vulkan-1.dll', 'version', '.deskweek-files.json')
   if (Test-Path -LiteralPath $manifest) { $oldNames = @(Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json) }
@@ -48,7 +63,7 @@ try {
     $target = Child $TargetDir $name
     if (Test-Path -LiteralPath $target) {
       $destination = Child $backupRoot $name
-      Move-Item -LiteralPath $target -Destination $destination -Force
+      WithRetry { Move-Item -LiteralPath $target -Destination $destination -Force }
       $moved.Add($name)
     }
   }
@@ -56,7 +71,7 @@ try {
     $sourcePath = Child $source.FullName $name
     $destination = Child $TargetDir $name
     $installed.Add($name)
-    Copy-Item -LiteralPath $sourcePath -Destination $destination -Recurse -Force
+    WithRetry { Copy-Item -LiteralPath $sourcePath -Destination $destination -Recurse -Force }
   }
   $started = Start-Process -FilePath $ExePath -WorkingDirectory $TargetDir -PassThru
   Start-Sleep -Seconds 3
@@ -69,8 +84,9 @@ try {
     foreach ($name in $moved) {
       $sourcePath = Child $backupRoot $name
       $destination = Child $TargetDir $name
-      Move-Item -LiteralPath $sourcePath -Destination $destination -Force
+      WithRetry { Move-Item -LiteralPath $sourcePath -Destination $destination -Force }
     }
-    if ($moved.Count -gt 0 -and (Test-Path -LiteralPath $ExePath)) { Start-Process -FilePath $ExePath -WorkingDirectory $TargetDir }
+    $oldStillRunning = [bool](Get-Process -Id $WaitPid -ErrorAction SilentlyContinue)
+    if (-not $oldStillRunning -and (Test-Path -LiteralPath $ExePath)) { Start-Process -FilePath $ExePath -WorkingDirectory $TargetDir }
   } catch { Log "Rollback failed; recovery files: $backupRoot; $($_.Exception.Message)" }
 }

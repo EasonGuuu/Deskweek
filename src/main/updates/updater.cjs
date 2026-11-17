@@ -141,7 +141,7 @@ async function downloadAndInstallUpdate(event, portableDataDir) {
   const powershell = path.join((process.env && process.env.SystemRoot) || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const updater = spawn(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", scriptPath, String(process.pid), finalPath, targetDir, process.execPath, logPath, startedPath], { detached: true, stdio: "ignore", windowsHide: true });
   try {
-    await waitForUpdaterStarted(updater, startedPath);
+    await waitForUpdaterStarted(updater, startedPath, 120000);
   } catch (error) {
     try { updater.kill(); } catch { /* already exited */ }
     try { fs.unlinkSync(startedPath); } catch { /* no marker */ }
@@ -151,7 +151,7 @@ async function downloadAndInstallUpdate(event, portableDataDir) {
   try { fs.unlinkSync(startedPath); } catch { /* best effort */ }
   updater.unref();
   report({ phase: "ready", downloaded, total, percent: 100 });
-  setTimeout(() => app.quit(), 700);
+  setTimeout(() => { if (typeof app.exit === "function") app.exit(0); else app.quit(); }, 700);
   return { ok: true, updated: true, info };
 }
 
